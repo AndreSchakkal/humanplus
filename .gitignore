@@ -18,7 +18,7 @@ dist/
 *.npz
 *.npy
 *.pkl
-*.hdf5
+# *.hdf5
 
 
 # Compiled Java class files
