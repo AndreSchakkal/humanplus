@@ -41,6 +41,9 @@ from .a1.a1_config import A1RoughCfg, A1RoughCfgPPO
 from .h1.h1 import H1
 from .h1.h1_config import H1RoughCfg, H1RoughCfgPPO
 
+from .g1.g1 import G1
+from .g1.g1_config import G1RoughCfg, G1RoughCfgPPO
+
 
 import os
 
@@ -52,3 +55,5 @@ task_registry.register( "anymal_b", Anymal, AnymalBRoughCfg(), AnymalBRoughCfgPP
 task_registry.register( "a1", LeggedRobot, A1RoughCfg(), A1RoughCfgPPO(), 'a1')
 task_registry.register( "cassie", Cassie, CassieRoughCfg(), CassieRoughCfgPPO(), 'cassie')
 task_registry.register( "h1", H1, H1RoughCfg(), H1RoughCfgPPO(), 'h1')
+
+task_registry.register( "g1", G1, G1RoughCfg(), G1RoughCfgPPO(), 'g1')

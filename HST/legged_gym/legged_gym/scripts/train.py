@@ -39,7 +39,7 @@ import torch
 import wandb
 
 def train(args):
-    wandb.init(project='humanoid', name=args.run_name, entity="zfu")
+    wandb.init(project='Humanoid', name=args.run_name, entity="andre-schakkal-massachusetts-institute-of-technology")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/h1/h1_config.py", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/h1/h1.py", policy="now")
     # wandb.save(LEGGED_GYM_ROOT_DIR + "../rsl_rl/modules/actor_critic.py", policy="now")

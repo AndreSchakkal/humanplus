@@ -102,8 +102,43 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 if self.feature_loss:
                     dummy_index = min(start_ts+self.chunk_size, episode_len - 1)
                     image_dict_future[cam_name] = root[f'/observations/images/{cam_name}'][dummy_index]
-                    
-            
+
+
+
+            for cam_name in image_dict.keys():
+                img = image_dict[cam_name]
+                # if it's in C×H×W (e.g. (3,480,640)), swap to H×W×C
+                swapped = False
+                if img.ndim == 3 and img.shape[0] in (1, 3, 4):
+                    img = np.moveaxis(img, 0, -1)    # now (480,640,3)
+                    swapped = True
+
+                resized = cv2.resize(img, (self.width, self.height), interpolation=cv2.INTER_AREA)
+
+                # swap back to C×H×W if we did a swap
+                if swapped:
+                    resized = np.moveaxis(resized, -1, 0)   # back to (3,320,240)
+
+                image_dict[cam_name] = resized
+
+            if self.feature_loss:
+                for cam_name in image_dict_future.keys():
+                    img = image_dict_future[cam_name]
+                    # if it's in C×H×W (e.g. (3,480,640)), swap to H×W×C
+                    swapped = False
+                    if img.ndim == 3 and img.shape[0] in (1, 3, 4):
+                        img = np.moveaxis(img, 0, -1)    # now (480,640,3)
+                        swapped = True
+
+                    resized = cv2.resize(img, (self.width, self.height), interpolation=cv2.INTER_AREA)
+
+                    # swap back to C×H×W if we did a swap
+                    if swapped:
+                        resized = np.moveaxis(resized, -1, 0)   # back to (3,320,240)
+
+                    image_dict_future[cam_name] = resized
+
+
             if compressed:
                 for cam_name in image_dict.keys():
                     decompressed_image = cv2.imdecode(image_dict[cam_name], 1)
@@ -139,10 +174,12 @@ class EpisodicDataset(torch.utils.data.Dataset):
             all_cam_images_future = []
         for cam_name in self.camera_names:
             all_cam_images.append(image_dict[cam_name])
+            # print(all_cam_images[0].shape)
             if self.feature_loss:
                 all_cam_images_future.append(image_dict_future[cam_name])
                 
         all_cam_images = np.stack(all_cam_images, axis=0)
+        # print("all_cam_images ", all_cam_images.shape)
         if self.feature_loss:
             all_cam_images_future = np.stack(all_cam_images_future, axis=0)
 
@@ -155,11 +192,14 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
-        # channel last
-        image_data = torch.einsum('k h w c -> k c h w', image_data)
+        # # channel last
+        # image_data = torch.einsum('k h w c -> k c h w', image_data)
         image_data = image_data / 255.0
         if flipped_data:
             image_data = image_data.flip(-1)
+
+
+
         #     cv2.imwrite(f'check_data_aug/flipped_image_{index}0.jpg', image_data[0].permute(1,2,0).numpy()*255)
         #     cv2.imwrite(f'check_data_aug/flipped_image_{index}1.jpg', image_data[1].permute(1,2,0).numpy()*255)
         # else:
@@ -195,7 +235,6 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
-        
         return image_data, qpos_data, action_data, is_pad
 
 
@@ -303,6 +342,7 @@ def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_
     # obtain train test split on dataset_dir_l[0]
     # shuffled_episode_ids_0 = np.random.permutation(num_episodes_0)
     shuffled_episode_ids_0 = np.arange(num_episodes_0)
+    print("shuffled_episode_ids_0", shuffled_episode_ids_0)
     train_episode_ids_0 = shuffled_episode_ids_0[:int(train_ratio * num_episodes_0)]
     val_episode_ids_0 = shuffled_episode_ids_0[int(train_ratio * num_episodes_0):]
     print(f'train_episode_ids_0: {train_episode_ids_0}')

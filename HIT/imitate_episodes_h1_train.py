@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import datetime
+from os.path import join, basename, dirname
 import os
 import pickle
 import argparse
@@ -14,9 +16,33 @@ from constants import TASK_CONFIGS
 from model_util import make_policy, make_optimizer
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
+    image_data, qpos_data, action_data, is_pad = data #qpos: (Batch, Episode length, state_dim)
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
+    # print("image_data" ,image_data.shape)
+    # print("qpos_data ", qpos_data.shape)
+    # print("action_data ", action_data.shape)
+    # print("is_pad ", is_pad.shape)
+    # print()
+
+
+    # HIT target format
+    # # image_data torch.Size([48, 2, 3, 360, 640])       # # image_data torch.Size([48, 4, 3, 360, 640])
+    # # qpos_data  torch.Size([48, 35])
+    # # action_data  torch.Size([48, 50, 40])
+    # # is_pad  torch.Size([48, 50])
+
+    # Current format
+    # image_data torch.Size([48, 2, 3, 480, 640])
+    # qpos_data  torch.Size([48, 23])
+    # action_data  torch.Size([48, 50, 23])
+    # is_pad  torch.Size([48, 50])
+
+    # Needs to be set
+    # 'height':args['height'],
+    # 'width':args['width'],
+
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+
 
 def train_bc(train_dataloader, val_dataloader, config):
     num_steps = config['num_steps']
@@ -167,7 +193,7 @@ def main_train(args):
     else:
         state_idx = np.arange(state_dim).tolist()
         action_idx = np.arange(action_dim).tolist()
-    lr_backbone = 1e-5
+    lr_backbone = -1e-5
     backbone = args['backbone']
     if policy_class == 'ACT':
         enc_layers = 4
@@ -362,14 +388,66 @@ if __name__ == '__main__':
     parser.add_argument('--randomize_data_degree', action='store', type=int, default=3)
     
     parser.add_argument('--wandb', action='store_true')
+    # parser.add_argument('--datetime_naming', action='store_true', help="automatically add datetime to the end of ckpt_dir")
     
     parser.add_argument('--model_type', type=str, default="HIT")
     parser.add_argument('--gpu_id', type=int, default=0)
     
     args = parser.parse_args()
     torch.cuda.set_device(args.gpu_id)
-    PROJECT_NAME = 'H1'
-    WANDB_USERNAME = "WANDB_USERNAME"
+    
+    if True:
+        if args.ckpt_dir.endswith('/'):
+            args.ckpt_dir = args.ckpt_dir[:-1]
+        suffix = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+        args.ckpt_dir = join(dirname(args.ckpt_dir), basename(args.ckpt_dir)+f"_{suffix}")
+        print(args.ckpt_dir)
+        # delattr(args, 'datetime_naming')
+
+    PROJECT_NAME = 'HumanPlus'
+    WANDB_USERNAME = "andre-schakkal-massachusetts-institute-of-technology"
+
     main_train(vars(args))
     
- 
+"""
+python imitate_episodes_h1_train.py \
+    --task_name new_data_placing \
+    --ckpt_dir try_clip/ \
+    --policy_class HIT \
+    --chunk_size 50 \
+    --hidden_dim 512 \
+    --batch_size 16 \
+    --dim_feedforward 512 \
+    --lr 1e-5 --seed 0 \
+    --num_steps 100000 \
+    --eval_every 10000 \
+    --validate_every 10000 \
+    --save_every 10000 \
+    --no_encoder \
+    --backbone resnet18 \
+    --same_backbones --use_pos_embd_image 1 --use_pos_embd_action 1 \
+    --dec_layers 6 --gpu_id 0 \
+    --feature_loss_weight 0.005 --use_mask --data_aug --wandb
+
+python imitate_episodes_h1_train.py \
+    --task_name new_data_placing \
+    --ckpt_dir try_clip/ \
+    --policy_class HIT \
+    --chunk_size 50 \
+    --hidden_dim 512 \
+    --batch_size 16 \
+    --dim_feedforward 512 \
+    --lr 1e-5 --seed 0 \
+    --num_steps 100000 \
+    --eval_every 10000 \
+    --validate_every 10000 \
+    --save_every 10000 \
+    --no_encoder \
+    --backbone clip_ViT-B/32 \
+    --same_backbones --use_pos_embd_image 1 --use_pos_embd_action 1 \
+    --dec_layers 6 --gpu_id 0 \
+    --feature_loss_weight 0.005 --use_mask --data_aug --wandb
+
+## 
+    --backbone resnet18 \
+ """

@@ -18,6 +18,36 @@ from .position_encoding import build_position_encoding
 import IPython
 e = IPython.embed
 
+import clip
+
+class CLIPWrapper(nn.Module):
+    def __init__(self, model_name="ViT-B/32", trainable=False, device="cuda:0"):
+        super().__init__()
+        self.clip_model, self.preprocess = clip.load(model_name, device=device, jit=False)
+        self.visual = self.clip_model.visual.float()  # Save visual module
+
+        if not trainable:
+            for param in self.visual.parameters():
+                param.requires_grad = False
+
+        self.device = device
+        self.num_channels = self.visual.output_dim  # e.g., 512 or 768
+
+    def forward(self, x):
+        """
+        tensor: torch.Size([32, 3, 360, 640])
+        output: {0: torch.Size([32, 512, 12, 20])}     
+        """
+        x = F.interpolate(x, size=(224, 224))
+
+        target_dtype = next(self.visual.parameters()).dtype
+        x = x.to(device=self.device, dtype=target_dtype)
+
+        x = self.visual(x)
+        print("output shape", x.shape)  ## torch.Size([32, 512])
+        return {'0': x}  # mimic IntermediateLayerGetter format
+
+
 class FrozenBatchNorm2d(torch.nn.Module):
     """
     BatchNorm2d where the batch statistics and the affine parameters are fixed.
@@ -63,16 +93,24 @@ class BackboneBase(nn.Module):
                  return_interm_layers: bool,
                  name: str):
         super().__init__()
-        # for name, parameter in backbone.named_parameters(): # only train later layers # TODO do we want this?
-        #     if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
-        #         parameter.requires_grad_(False)
+        for name_, parameter in backbone.named_parameters(): # only train later layers # TODO do we want this?
+            if not train_backbone or 'layer2' not in name_ and 'layer3' not in name_ and 'layer4' not in name_:
+                parameter.requires_grad_(False)
         self.name = name
+        print("name", name)
+        print("return_interm_layers", return_interm_layers)
         if name.startswith('resnet'):
             if return_interm_layers:
                 return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
             else:
                 return_layers = {'layer4': "0"}
-        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        # self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        if name.startswith('resnet'):
+            self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+
+        elif name.startswith('clip'):
+            self.body = backbone
+
         self.num_channels = num_channels
 
     def forward(self, tensor):
@@ -91,24 +129,48 @@ class Backbone(BackboneBase):
                 replace_stride_with_dilation=[False, False, dilation],
                 pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-    
+        elif name.startswith('clip'):
+            print(f'=================Using CLIP {name}=================')
+            backbone = CLIPWrapper(model_name=name.split('_')[1], trainable=train_backbone)
+            num_channels = 512
+        else:
+            raise ValueError(f"Unsupported backbone: {name}")
 
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers, name)
 
+from .position_encoding import PositionEmbeddingSine
 
 class Joiner(nn.Sequential):
-    def __init__(self, backbone, position_embedding):
+    def __init__(self, backbone, position_embedding, name="resnet18"):
         super().__init__(backbone, position_embedding)
+        self.name = name
+        self.position_embedding = position_embedding or PositionEmbeddingSine(num_pos_feats=128, normalize=True)
 
     def forward(self, tensor_list: NestedTensor):
         xs = self[0](tensor_list)
         out: List[NestedTensor] = []
         pos = []
-        for name, x in xs.items():
+        for i, (name, x) in enumerate(xs.items()):
             out.append(x)
-            # position encoding
-            pos.append(self[1](x).to(x.dtype))
+            print(f"\n\nx.shape: {x.shape}")  ## 
+            # position encoding  
+            if "clip" not in self.name:
+                pos_emb = self[1](x)  ## x.shape: torch.Size([32, 512, 12, 20]); pos_emb.shape: torch.Size([1, 512, 12, 20])
+            else:
+                B, C = x.shape  # Shape is [B, C], i.e., [32, 512]
+                
+                # Reshape x as [B, C, 1, 1] so position encoding can apply to it
+                x_reshaped = x.unsqueeze(-1).unsqueeze(-1)  # Shape: [B, C, 1, 1]
+                
+                # Apply position encoding (position embedding needs to be adjusted for flat input)
+                pos_emb = self.position_embedding(x_reshaped)  # Now works as 2D
 
+                # Now flatten back the position embedding if necessary (reshape it to [B, C])
+                pos_emb = pos_emb.flatten(2).squeeze(-1).squeeze(-1)  # Shape: [B, C]
+
+            # print(f"pos_emb.shape: {pos_emb.shape}\n\n") 
+            pos.append(pos_emb.to(x.dtype))
+        # print(f"out.shape: {len(out)}\n\n") 
         return out, pos
 
 
@@ -117,6 +179,6 @@ def build_backbone(args):
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
-    model = Joiner(backbone, position_embedding)
+    model = Joiner(backbone, position_embedding, name=args.backbone)
     model.num_channels = backbone.num_channels
     return model

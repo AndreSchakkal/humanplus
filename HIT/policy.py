@@ -20,7 +20,8 @@ from collections import OrderedDict
 class HITPolicy(nn.Module):
     def __init__(self, args_override):
         super().__init__()
-        args_override['model_type'] = "HIT"
+
+
         model, optimizer = build_ACT_model_and_optimizer(args_override)
         self.model = model
         self.optimizer = optimizer
@@ -40,6 +41,7 @@ class HITPolicy(nn.Module):
             
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                          std=[0.229, 0.224, 0.225])
+        # print(image.shape)
         image = normalize(image)
         if actions is not None: # training time
             actions = actions[:, :self.model.num_queries]
@@ -112,6 +114,10 @@ class DiffusionPolicy(nn.Module):
         linears = nn.ModuleList(linears)
         
         backbones = replace_bn_with_gn(backbones) # TODO
+
+        for param in backbones.parameters():
+            param.requires_grad = False
+
 
 
         noise_pred_net = ConditionalUnet1D(

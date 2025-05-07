@@ -61,12 +61,21 @@ class TaskRegistry():
     
     def get_cfgs(self, name, load_run=None) -> Tuple[LeggedRobotCfg, LeggedRobotCfgPPO]:
         if load_run is not None:
-            from runpy import run_path
-            cfg_path = f'./logs/rough_h1/{load_run}/h1_config.py'
-            cfgs = run_path(cfg_path)
-            train_cfg = cfgs['H1RoughCfgPPO']
-            env_cfg = cfgs['H1RoughCfg']
-            print('Loaded config from:', cfg_path)
+            if name=="h1":
+                from runpy import run_path
+                cfg_path = f'./logs/rough_h1/{load_run}/h1_config.py'
+                cfgs = run_path(cfg_path)
+                train_cfg = cfgs['H1RoughCfgPPO']
+                env_cfg = cfgs['H1RoughCfg']
+                print('Loaded config from:', cfg_path)
+            else:
+                from runpy import run_path
+                cfg_path = f'./logs/rough_g1/{load_run}/g1_config.py'
+                cfgs = run_path(cfg_path)
+                train_cfg = cfgs['G1RoughCfgPPO']
+                env_cfg = cfgs['G1RoughCfg']
+                print('Loaded config from:', cfg_path)
+
         else:
             train_cfg = self.train_cfgs[name]
             env_cfg = self.env_cfgs[name]
