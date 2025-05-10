@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import os
+from os.path import join, basename, dirname
 import h5py
 import pickle
 import fnmatch
@@ -76,6 +77,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
             flipped_data = True
         else:
             flipped_data = False
+
+
         with h5py.File(dataset_path, 'r') as root:
             is_sim = False
             compressed = root.attrs.get('compress', False)
@@ -235,7 +238,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
-        return image_data, qpos_data, action_data, is_pad
+
+        ## fake text conditioning from file name
+        text_conditioning = basename(dirname(dataset_path))
+        # print(f"fake text conditioning: {text_conditioning} (name of the data subdir, should be updated in HIT/utils.py EpisodicDataset.__getitem__)")
+        return image_data, qpos_data, action_data, is_pad, text_conditioning
 
 
 def get_norm_stats(dataset_path_list,observation_name=['qpos']):
@@ -328,7 +335,8 @@ def load_data(dataset_dir_l, name_filter, camera_names, batch_size_train, batch_
               policy_class=None, stats_dir_l=None, sample_weights=None, train_ratio=0.99,
               width=None, height=None, normalize_resnet=False, data_aug=False,observation_name=[],
               feature_loss=False, grayscale=False, randomize_color=False,
-              randomize_index=None,randomize_data_degree=0,randomize_data=False):
+              randomize_index=None,randomize_data_degree=0,randomize_data=False,
+              load_text_conditioning=True):
     if type(dataset_dir_l) == str:
         dataset_dir_l = [dataset_dir_l]
     dataset_path_list_list = [find_all_hdf5(dataset_dir, skip_mirrored_data) for dataset_dir in dataset_dir_l]

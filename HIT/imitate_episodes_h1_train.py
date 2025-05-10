@@ -16,7 +16,7 @@ from constants import TASK_CONFIGS
 from model_util import make_policy, make_optimizer
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data #qpos: (Batch, Episode length, state_dim)
+    image_data, qpos_data, action_data, is_pad, text = data #qpos: (Batch, Episode length, state_dim)
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     # print("image_data" ,image_data.shape)
     # print("qpos_data ", qpos_data.shape)
@@ -41,7 +41,7 @@ def forward_pass(data, policy):
     # 'height':args['height'],
     # 'width':args['width'],
 
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    return policy(qpos_data, image_data, action_data, is_pad, text) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):
@@ -309,7 +309,8 @@ def main_train(args):
                                                            randomize_color = args['randomize_color'],
                                                             randomize_data_degree = args['randomize_data_degree'],
                                                             randomize_data = args['randomize_data'],
-                                                            randomize_index = randomize_index,  
+                                                            randomize_index = randomize_index,
+                                                           load_text_conditioning=True,
                                                            )
 
     # save dataset stats
@@ -408,6 +409,12 @@ if __name__ == '__main__':
     WANDB_USERNAME = "andre-schakkal-massachusetts-institute-of-technology"
 
     main_train(vars(args))
+
+"""
+conda install --yes -c pytorch pytorch=1.7.1 torchvision cudatoolkit=11.0
+pip install ftfy regex tqdm
+pip install git+https://github.com/openai/CLIP.git
+"""
     
 """
 python imitate_episodes_h1_train.py \
@@ -446,8 +453,9 @@ python imitate_episodes_h1_train.py \
     --backbone clip_ViT-B/32 \
     --same_backbones --use_pos_embd_image 1 --use_pos_embd_action 1 \
     --dec_layers 6 --gpu_id 0 \
-    --feature_loss_weight 0.005 --use_mask --data_aug --wandb
+    --feature_loss_weight 0.005 --use_mask --data_aug
 
 ## 
     --backbone resnet18 \
+    --wandb
  """

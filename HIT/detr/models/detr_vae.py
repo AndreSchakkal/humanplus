@@ -63,7 +63,7 @@ class DETRVAE_Decoder(nn.Module):
         self.additional_pos_embed = nn.Embedding(1, hidden_dim) # learned position embedding for proprio and latent
         self.feature_loss = feature_loss
           
-    def forward(self, qpos, image):
+    def forward(self, qpos, image, text_conditioning=None):
         if self.feature_loss:
             # bs,_,_,h,w = image.shape
             image_future = image[:,len(self.camera_names):].clone()
@@ -71,7 +71,8 @@ class DETRVAE_Decoder(nn.Module):
 
         all_cam_features = []
         all_cam_pos = []
-        if "clip" not in self.backbones[0].name:
+        is_clip = "clip" in self.backbones[0].name
+        if not is_clip:
 
             if len(self.backbones)>1:
                 # Image observation features and position embeddings
@@ -89,7 +90,7 @@ class DETRVAE_Decoder(nn.Module):
                     bs,_,_,h,w = image.shape
                     image_total = torch.cat([image, image_future], axis=0) #cat along the batch dimension
                     bs_t,_,_,h_t,w_t = image_total.shape
-                    features, pos = self.backbones[0](image_total.reshape([-1,3,image_total.shape[-2],image_total.shape[-1]]))
+                    features, pos = self.backbones[0](image_total.reshape([-1,3,image_total.shape[-2],image_total.shape[-1]]), text_conditioning)
                     project_feature = self.input_proj(features[0])
                     project_feature = project_feature.reshape([bs_t, self.cam_num,project_feature.shape[1],project_feature.shape[2],project_feature.shape[3]])
                     for i in range(self.cam_num):
@@ -98,159 +99,76 @@ class DETRVAE_Decoder(nn.Module):
                         all_cam_features_future.append(project_feature[bs:,i,:])
                 else:
                     bs,_,_,h,w = image.shape
-                    features, pos = self.backbones[0](image.reshape([-1,3,image.shape[-2],image.shape[-1]]))
+                    features, pos = self.backbones[0](image.reshape([-1,3,image.shape[-2],image.shape[-1]]), text_conditioning)
                     project_feature = self.input_proj(features[0]) 
                     project_feature = project_feature.reshape([bs, self.cam_num,project_feature.shape[1],project_feature.shape[2],project_feature.shape[3]])
                     for i in range(self.cam_num):
                         all_cam_features.append(project_feature[:,i,:])  ## [16, 512, 12, 20]
                         all_cam_pos.append(pos[0])
-                        print(f"project_feature[:,i,:].shape : {project_feature[:,i,:].shape}")
+                        # print(f"project_feature[:,i,:].shape : {project_feature[:,i,:].shape}")
 
             # fold camera dimension into width dimension
-            src = torch.cat(all_cam_features, axis=3) ## [B, 512, 12, 40]
-            pos = torch.cat(all_cam_pos, axis=3) ## [1, 512, 12, 40]
+            src = torch.cat(all_cam_features, axis=3)   ## [B, 512, 12, 40]
+            pos = torch.cat(all_cam_pos, axis=3)        ## [1, 512, 12, 40]
         else:
 
-            # Reshape image for CLIP (in case there are multiple camera views)
             bs, _, _, h, w = image.shape
-            features, pos = self.backbones[0](image.reshape([-1, 3, image.shape[-2], image.shape[-1]]))
-            # Here features are already in a flattened format
-            for i in range(self.cam_num):
-                all_cam_features.append(features[0][i*bs:(i+1)*bs].unsqueeze(-1))  # [B, 512, 1]
-                all_cam_pos.append(pos[0])  # Since pos[0] might be a global position
+            if self.feature_loss and self.training:
+                # Process both current and future frames for CLIP
+                image_total = torch.cat([image, image_future], axis=0)
+                features, pos = self.backbones[0](image_total.reshape([-1, 3, image_total.shape[-2], image_total.shape[-1]]))
+                
+                # Split features back into current and future
+                current_features = features[0][:bs*self.cam_num]
+                future_features = features[0][bs*self.cam_num:]
+                
+                # Process current features
+                for i in range(self.cam_num):
+                    all_cam_features.append(current_features[i*bs:(i+1)*bs].unsqueeze(-1))
+                    all_cam_pos.append(pos[0].unsqueeze(-1))
+                
+                # Store future features for later use
+                all_cam_features_future = []
+                for i in range(self.cam_num):
+                    all_cam_features_future.append(future_features[i*bs:(i+1)*bs].unsqueeze(-1))
+            else:
+                # Original CLIP processing for inference
+                features, pos = self.backbones[0](image.reshape([-1, 3, image.shape[-2], image.shape[-1]]))
+                for i in range(self.cam_num):
+                    all_cam_features.append(features[0][i*bs:(i+1)*bs].unsqueeze(-1))
+                    all_cam_pos.append(pos[0].unsqueeze(-1))
 
-            src = torch.cat(all_cam_features, dim=2)  # [B, 512, 2]
-            pos = torch.cat(all_cam_features, dim=2)  # [1, 512, 2]
+            src = torch.cat(all_cam_features, dim=2)
+            pos = torch.cat(all_cam_pos, dim=2)
         
-        print(f"self.query_embed.weight.shape: {self.query_embed.weight.shape}")  ## [50, 512]
-        print(f"src.shape : {src.shape}")  ## [16, 512, 12, 40]
-        print(f"pos.shape : {pos.shape}")  ## [1, 512, 12, 40]
-        # proprioception features
-        proprio_input = self.input_proj_robot_state(qpos) # [B, 512]
+        # print(f"self.query_embed.weight.shape : {self.query_embed.weight.shape}")  ## [50, 512]
+        # print(f"self.additional_pos_embed.weight.shape : {self.additional_pos_embed.weight.shape}")  ## [1, 512]
+        # print(f"src.shape : {src.shape}")
+        # print(f"pos.shape : {pos.shape}")
 
-        hs = self.transformer_decoder(src, self.query_embed.weight, proprio_input=proprio_input, pos_embed=pos, additional_pos_embed=self.additional_pos_embed.weight) # [B, chunk_size, 512]
-        # a_hat = self.action_head(hs) #B, chunk_size, action_dim
-        hs_action = hs[:,-1*self.num_queries:,:].clone() #B, action_dim, 512
-        hs_img = hs[:,1:-1*self.num_queries,:].clone() #B, image_feature_dim, 512 #final image feature
-        hs_proprio = hs[:,[0],:].clone() #B, proprio_feature_dim, 512
+        # proprioception features
+        proprio_input = self.input_proj_robot_state(qpos)  # [B, 512]
+        hs = self.transformer_decoder(src, self.query_embed.weight,
+                                      proprio_input=proprio_input, pos_embed=pos,
+                                      additional_pos_embed=self.additional_pos_embed.weight) # [B, chunk_size, 512]
+        # a_hat = self.action_head(hs) # B, chunk_size, action_dim
+        hs_action = hs[:,-1*self.num_queries:,:].clone() # B, action_dim, 512
+        hs_img = hs[:,1:-1*self.num_queries,:].clone() # B, image_feature_dim, 512 # final image feature
+        hs_proprio = hs[:,[0],:].clone() # B, proprio_feature_dim, 512
         a_hat = self.action_head(hs_action)
-        a_proprio = self.proprio_head(hs_proprio) #proprio head
+        a_proprio = self.proprio_head(hs_proprio) # proprio head
         if self.feature_loss and self.training:
             # proprioception features
-            src_future = torch.cat(all_cam_features_future, axis=3) #B, 512,12,26
-            src_future = src_future.flatten(2).permute(2, 0, 1).transpose(1, 0) # B, 12*26, 512
+            if not is_clip:
+                src_future = torch.cat(all_cam_features_future, axis=3) #B, 512,12,26
+                src_future = src_future.flatten(2).permute(2, 0, 1).transpose(1, 0) # B, 12*26, 512
+            else:
+                src_future = torch.cat(all_cam_features_future, dim=2)  # For CLIP: [B, 512, cam_num]
+                src_future = src_future.permute(0, 2, 1)  # [B, cam_num, 512]
+            
             hs_img = {'hs_img': hs_img, 'src_future': src_future}
             
         return a_hat, a_proprio, hs_img
-
-
-# class DETRVAE_Decoder(nn.Module):
-#     """ This is the decoder-only transformer """
-#     def __init__(self, backbones, transformer_decoder, state_dim, num_queries, camera_names, action_dim,
-#                  feature_loss=False):
-#         super().__init__()
-#         self.num_queries = num_queries
-#         self.camera_names = camera_names
-#         self.cam_num = len(camera_names)
-#         self.transformer_decoder = transformer_decoder
-#         self.state_dim, self.action_dim = state_dim, action_dim
-#         hidden_dim = transformer_decoder.d_model
-#         self.action_head = nn.Linear(hidden_dim, action_dim)
-#         self.proprio_head = nn.Linear(hidden_dim, state_dim)
-#         self.is_pad_head = nn.Linear(hidden_dim, 1)
-#         self.query_embed = nn.Embedding(num_queries, hidden_dim)
-        
-#         if backbones is not None:
-#             # If using CLIP as a backbone, the feature extraction process is different
-#             if "clip" not in backbones[0].name:
-#                 self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
-#             else:
-#                 self.input_proj = None  # No projection needed for CLIP backbone
-
-#             self.backbones = nn.ModuleList(backbones)
-#             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
-#         else:
-#             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
-#             self.input_proj_env_state = nn.Linear(7, hidden_dim)
-#             self.pos = torch.nn.Embedding(2, hidden_dim)
-#             self.backbones = None
-            
-#         # encoder extra parameters
-#         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim))  # [CLS], qpos, a_seq
-#         self.additional_pos_embed = nn.Embedding(1, hidden_dim)  # learned position embedding for proprio and latent
-#         self.feature_loss = feature_loss
-
-#     def forward(self, qpos, image):
-#         if self.feature_loss:
-#             image_future = image[:, len(self.camera_names):].clone()
-#             image = image[:, :len(self.camera_names)].clone()
-
-#         all_cam_features = []
-#         all_cam_pos = []
-
-#         if "clip" not in self.backbones[0].name:
-#             # If not using CLIP, process images using standard ResNet-like backbones
-#             if len(self.backbones) > 1:
-#                 for cam_id, _ in enumerate(self.camera_names):
-#                     features, pos = self.backbones[cam_id](image[:, cam_id])
-#                     features = features[0]  # Take the last layer feature
-#                     pos = pos[0]
-#                     all_cam_features.append(self.input_proj(features))
-#                     all_cam_pos.append(pos)
-#             else:
-#                 # Handle single camera case with future images (feature loss)
-#                 bs, _, _, h, w = image.shape
-#                 image_total = torch.cat([image, image_future], axis=0)
-#                 bs_t, _, _, h_t, w_t = image_total.shape
-#                 features, pos = self.backbones[0](image_total.reshape([-1, 3, image_total.shape[-2], image_total.shape[-1]]))
-#                 project_feature = self.input_proj(features[0])
-#                 project_feature = project_feature.reshape([bs_t, self.cam_num, project_feature.shape[1], project_feature.shape[2], project_feature.shape[3]])
-#                 for i in range(self.cam_num):
-#                     all_cam_features.append(project_feature[:bs, i, :])
-#                     all_cam_pos.append(pos[0])
-#                 # Future feature projections
-#                 all_cam_features_future = []
-#                 for i in range(self.cam_num):
-#                     all_cam_features_future.append(project_feature[bs:, i, :])
-
-#             # Flatten the camera features along the width dimension (fold into one dimension)
-#             src = torch.cat(all_cam_features, axis=3)  # B, 512, 12, 26
-#             pos = torch.cat(all_cam_pos, axis=3)  # B, 512, 12, 26
-#         else:
-#             # Now handle the CLIP backbone which produces flat features
-#             # print(f"Using CLIP model with {self.cam_num} cameras")
-
-#             # Reshape image for CLIP (in case there are multiple camera views)
-#             bs, _, _, h, w = image.shape
-#             features, pos = self.backbones[0](image.reshape([-1, 3, image.shape[-2], image.shape[-1]]))
-#             # Here features are already in a flattened format
-#             for i in range(self.cam_num):
-#                 all_cam_features.append(features[0][:(i+1)*bs])  # [B, C] features[0] is [32, 512]
-#                 all_cam_pos.append(pos[0])  # Since pos[0] might be a global position
-
-#             src = torch.cat(all_cam_features, dim=1)  # B, 512 * cam_num
-#             pos = torch.cat(all_cam_features, dim=1)  # B, 512 * cam_num
-
-#         # If the model has proprioception inputs (robot state)
-#         proprio_input = self.input_proj_robot_state(qpos)  # B, hidden_dim
-
-#         hs = self.transformer_decoder(src, self.query_embed.weight, proprio_input=proprio_input, pos_embed=pos, additional_pos_embed=self.additional_pos_embed.weight)
-
-#         # Action prediction (get the last few queries)
-#         hs_action = hs[:, -1 * self.num_queries:, :].clone()  # B, action_dim, 512
-#         hs_img = hs[:, 1:-1 * self.num_queries, :].clone()  # B, image_feature_dim, 512
-
-#         hs_proprio = hs[:, [0], :].clone()  # B, proprio_feature_dim, 512
-
-#         a_hat = self.action_head(hs_action)
-#         a_proprio = self.proprio_head(hs_proprio)  # Proprioception head
-
-#         if self.feature_loss and self.training:
-#             src_future = torch.cat(all_cam_features_future, axis=3)  # B, 512, 12, 26
-#             src_future = src_future.flatten(2).permute(2, 0, 1).transpose(1, 0)  # B, 12*26, 512
-#             hs_img = {'hs_img': hs_img, 'src_future': src_future}
-
-#         return a_hat, a_proprio, hs_img
 
     
  

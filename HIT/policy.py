@@ -33,7 +33,7 @@ class HITPolicy(nn.Module):
             self.state_idx = None
             self.action_idx = None
     
-    def __call__(self, qpos, image, actions=None, is_pad=None):
+    def __call__(self, qpos, image, actions=None, is_pad=None, text_conditioning=None):
         if self.state_idx is not None:
             qpos = qpos[:, self.state_idx]
         if self.action_idx is not None:
@@ -48,7 +48,7 @@ class HITPolicy(nn.Module):
             is_pad = is_pad[:, :self.model.num_queries]
 
             loss_dict = dict()
-            a_hat, _, hs_img_dict = self.model(qpos, image)
+            a_hat, _, hs_img_dict = self.model(qpos, image, text_conditioning)
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict['l1'] = l1

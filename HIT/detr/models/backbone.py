@@ -20,32 +20,64 @@ e = IPython.embed
 
 import clip
 
-class CLIPWrapper(nn.Module):
+class CLIPVisualBackbone(nn.Module):
     def __init__(self, model_name="ViT-B/32", trainable=False, device="cuda:0"):
         super().__init__()
         self.clip_model, self.preprocess = clip.load(model_name, device=device, jit=False)
         self.visual = self.clip_model.visual.float()  # Save visual module
+        self.text = self.clip_model.transformer.float()  # Save text module
 
         if not trainable:
             for param in self.visual.parameters():
+                param.requires_grad = False
+            for param in self.text.parameters():
                 param.requires_grad = False
 
         self.device = device
         self.num_channels = self.visual.output_dim  # e.g., 512 or 768
 
-    def forward(self, x):
+    def encode_text(self, text):
+        """Encode text using CLIP's text encoder"""
+        text_tokens = clip.tokenize([text]).to(self.device)
+        with torch.no_grad():  # We typically want to keep text encoding fixed
+            text_features = self.text(text_tokens)[0]  # Get the [CLS] token features
+        return text_features
+
+    def forward(self, x, text_conditioning=None):
         """
-        tensor: torch.Size([32, 3, 360, 640])
-        output: {0: torch.Size([32, 512, 12, 20])}     
+        Args:
+            x: Image tensor of shape [B, 3, H, W]
+            text_conditioning: String for text conditioning
         """
         x = F.interpolate(x, size=(224, 224))
-
         target_dtype = next(self.visual.parameters()).dtype
         x = x.to(device=self.device, dtype=target_dtype)
-
-        x = self.visual(x)
-        print("output shape", x.shape)  ## torch.Size([32, 512])
-        return {'0': x}  # mimic IntermediateLayerGetter format
+        
+        # Get image features
+        image_features = self.visual(x)  # [B, 512]
+        
+        if text_conditioning is not None:
+            # Get text features
+            text_features = self.encode_text(text_conditioning)  # [1, 512]
+            
+            # Expand text features to match batch size
+            text_features = text_features.expand(image_features.shape[0], -1)  # [B, 512]
+            
+            # Combine image and text features (you can choose different combination methods)
+            # Method 1: Addition
+            combined_features = image_features + text_features
+            
+            # Alternative methods you might consider:
+            # Method 2: Concatenation and projection
+            # combined_features = torch.cat([image_features, text_features], dim=1)  # [B, 1024]
+            # You would need to add a projection layer to get back to 512 dims
+            
+            # Method 3: Element-wise multiplication
+            # combined_features = image_features * text_features
+            
+            return {'0': combined_features}
+        
+        return {'0': image_features}
 
 
 class FrozenBatchNorm2d(torch.nn.Module):
@@ -113,7 +145,7 @@ class BackboneBase(nn.Module):
 
         self.num_channels = num_channels
 
-    def forward(self, tensor):
+    def forward(self, tensor, text_conditioning=None):
         xs = self.body(tensor)
         return xs
 
@@ -131,7 +163,7 @@ class Backbone(BackboneBase):
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         elif name.startswith('clip'):
             print(f'=================Using CLIP {name}=================')
-            backbone = CLIPWrapper(model_name=name.split('_')[1], trainable=train_backbone)
+            backbone = CLIPVisualBackbone(model_name=name.split('_')[1], trainable=train_backbone)
             num_channels = 512
         else:
             raise ValueError(f"Unsupported backbone: {name}")
@@ -146,13 +178,13 @@ class Joiner(nn.Sequential):
         self.name = name
         self.position_embedding = position_embedding or PositionEmbeddingSine(num_pos_feats=128, normalize=True)
 
-    def forward(self, tensor_list: NestedTensor):
-        xs = self[0](tensor_list)
+    def forward(self, tensor_list: NestedTensor, text_conditioning=None):
+        xs = self[0](tensor_list, text_conditioning)
         out: List[NestedTensor] = []
         pos = []
         for i, (name, x) in enumerate(xs.items()):
             out.append(x)
-            print(f"\n\nx.shape: {x.shape}")  ## 
+            # print(f"\n\nx.shape: {x.shape}")  ##
             # position encoding  
             if "clip" not in self.name:
                 pos_emb = self[1](x)  ## x.shape: torch.Size([32, 512, 12, 20]); pos_emb.shape: torch.Size([1, 512, 12, 20])

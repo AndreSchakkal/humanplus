@@ -58,16 +58,24 @@ class Transformer_decoder(nn.Module):
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = pos_embed.flatten(2).permute(2, 0, 1).repeat(1, bs, 1)
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-
-        #decoder will add positional encoding 
+        elif len(src.shape) == 3:  # [bs, c, 2]
+            bs, c, seq_len = src.shape
+            src = src.permute(2, 0, 1)  # [2, bs, c]
+            query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)  # [50, bs, c]
+            src = torch.cat([proprio_input[None], src], axis=0)  # [3, bs, c]
+            
+            additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1)  # [1, bs, c]
+            pos_embed = pos_embed.permute(2, 0, 1).repeat(1, bs, 1)  # [2, bs, c]
+            pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)  # [3, bs, c]
 
         action_input_token = torch.zeros_like(query_embed)
-        input_tokens = torch.cat([src, action_input_token], axis=0)  #input tokens + positional encoding for action 
+
+        # print(f"forward | src.shape : {src.shape}")  ## [16, 512, 2]
+        # print(f"forward | action_input_token.shape : {action_input_token.shape}")  ## [50, 512]
+        input_tokens = torch.cat([src, action_input_token], axis=0)  # input tokens + positional encoding for action
         hs = self.decoder(input_tokens,pos_embed, query_embed)
         hs = hs.transpose(1, 0)
         return hs
-
-
 
 
 class Transformer(nn.Module):
