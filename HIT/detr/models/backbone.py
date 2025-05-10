@@ -20,8 +20,8 @@ e = IPython.embed
 
 import clip
 
-class CLIPVisualBackbone(nn.Module):
-    def __init__(self, model_name="ViT-B/32", trainable=False, device="cuda:0"):
+class CLIPBackbone(nn.Module):
+    def __init__(self, model_name="ViT-B/32", trainable=True, device="cuda:0"):
         super().__init__()
         self.clip_model, self.preprocess = clip.load(model_name, device=device, jit=False)
         self.visual = self.clip_model.visual.float()  # Save visual module
@@ -163,7 +163,7 @@ class Backbone(BackboneBase):
             num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         elif name.startswith('clip'):
             print(f'=================Using CLIP {name}=================')
-            backbone = CLIPVisualBackbone(model_name=name.split('_')[1], trainable=train_backbone)
+            backbone = CLIPBackbone(model_name=name.split('_')[1], trainable=True)
             num_channels = 512
         else:
             raise ValueError(f"Unsupported backbone: {name}")
